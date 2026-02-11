@@ -1,0 +1,28 @@
+[gd_scene format=3 uid="uid://dh0ewunxu642y"]
+
+[ext_resource type="Script" uid="uid://b444x72ccgt7y" path="res://client/scenes/Main.gd" id="1_vry3p"]
+[ext_resource type="Script" uid="uid://btse0gw104k0w" path="res://client/ClientMain.gd" id="2_qagc2"]
+[ext_resource type="PackedScene" uid="uid://d17o0bh8ugfsl" path="res://client/ui/DebugOverlay.tscn" id="3_qagc2"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_qagc2"]
+
+[node name="Main" type="Node3D" unique_id=1215585823]
+script = ExtResource("1_vry3p")
+
+[node name="ServerRoot" type="Node" parent="." unique_id=1039749820]
+
+[node name="ClientRoot" type="Node3D" parent="." unique_id=325835354]
+
+[node name="ClientMain" type="Node3D" parent="ClientRoot" unique_id=1269811465]
+script = ExtResource("2_qagc2")
+
+[node name="Player" type="Node3D" parent="ClientRoot/ClientMain" unique_id=1984354357]
+
+[node name="Camera3D" type="Camera3D" parent="ClientRoot/ClientMain/Player" unique_id=1576581674]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 3)
+
+[node name="Ground" type="MeshInstance3D" parent="ClientRoot/ClientMain" unique_id=47676382]
+transform = Transform3D(50, 0, 0, 0, 1, 0, 0, 0, 50, 0, 0, 0)
+mesh = SubResource("PlaneMesh_qagc2")
+
+[node name="DebugOverlay" parent="." unique_id=775984326 instance=ExtResource("3_qagc2")]
