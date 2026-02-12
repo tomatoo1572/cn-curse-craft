@@ -36,7 +36,6 @@ func _process(_delta: float) -> void:
 	_update_stream_sets()
 	_process_requests_budgeted()
 
-	# Stats
 	Stats.chunks_loaded = _renderers.size()
 	Stats.subchunks_loaded = _renderers.size()
 	Stats.chunk_gen_jobs_in_queue = _request_queue.size() + _pending_until.size()
@@ -68,7 +67,6 @@ func _update_stream_sets() -> void:
 		return da < db
 	)
 
-	# Rebuild request queue (no duplicates)
 	var new_queue: Array[Vector2i] = []
 	for c2 in ordered:
 		var k2: String = _key(c2.x, c2.y)
@@ -79,7 +77,6 @@ func _update_stream_sets() -> void:
 		new_queue.append(c2)
 	_request_queue = new_queue
 
-	# Unload far
 	var to_remove: Array[String] = []
 	for k3_var in _renderers.keys():
 		var k3: String = str(k3_var)
@@ -94,13 +91,11 @@ func _update_stream_sets() -> void:
 		_chunk_bytes.erase(k4)
 		_pending_until.erase(k4)
 		_mesh_pending.erase(k4)
-		# If a mesh job finishes later, we will ignore it safely.
 
 func _process_requests_budgeted() -> void:
 	var now_ms: int = Time.get_ticks_msec()
 	var budget: int = REQUESTS_PER_FRAME
 
-	# Retry pending due
 	var due: Array[String] = []
 	for k_var in _pending_until.keys():
 		var k: String = str(k_var)
@@ -120,7 +115,6 @@ func _process_requests_budgeted() -> void:
 		_try_request_chunk(cx, cz, now_ms)
 		budget -= 1
 
-	# Request new
 	while budget > 0 and not _request_queue.is_empty():
 		var c: Vector2i = _request_queue.pop_front()
 		_try_request_chunk(c.x, c.y, now_ms)
@@ -158,7 +152,6 @@ func _try_request_chunk(cx: int, cz: int, now_ms: int) -> void:
 func _on_chunk_bytes_ready(cx: int, cz: int, bytes: PackedByteArray) -> void:
 	var k: String = _key(cx, cz)
 	_chunk_bytes[k] = bytes
-
 	var _r: Node = _ensure_renderer(cx, cz)
 	_request_mesh_build(cx, cz, bytes)
 
@@ -207,3 +200,31 @@ func _on_mesh_ready(_cx: int, _cz: int, key: String, result: Dictionary) -> void
 
 func _key(cx: int, cz: int) -> String:
 	return "%d,%d" % [cx, cz]
+
+# -------------------------------------------------------------------
+# M4: world block query for collision + raycast
+# Only subchunk y=0 exists right now (y 0..15). Everything else is air.
+# -------------------------------------------------------------------
+func get_block_id_world(x: int, y: int, z: int) -> int:
+	if y < 0 or y >= 16:
+		return 0
+
+	var cx: int = int(floor(float(x) / 16.0))
+	var cz: int = int(floor(float(z) / 16.0))
+	var lx: int = x - (cx * 16)
+	var lz: int = z - (cz * 16)
+	if lx < 0:
+		lx += 16
+	if lz < 0:
+		lz += 16
+
+	var key: String = _key(cx, cz)
+	if not _chunk_bytes.has(key):
+		return 0
+
+	var bytes: PackedByteArray = _chunk_bytes[key] as PackedByteArray
+	# index: x + z*16 + y*256
+	var idx: int = lx + (lz * 16) + (y * 256)
+	if idx < 0 or idx >= bytes.size():
+		return 0
+	return int(bytes[idx])

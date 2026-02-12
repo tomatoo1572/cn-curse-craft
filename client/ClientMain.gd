@@ -2,10 +2,8 @@ extends Node3D
 
 const BlockRegistryScript = preload("res://shared/voxel/BlockRegistry.gd")
 const ChunkWorldScript = preload("res://client/voxel/ChunkWorld.gd")
-const DebugFlyControllerScript = preload("res://client/DebugFlyController.gd")
 
-@onready var camera: Camera3D = $Player/Camera3D
-@onready var player: Node3D = $Player
+@onready var player: Node = $Player
 
 var _transport: Node = null
 var _server: Node = null
@@ -16,7 +14,6 @@ var _chunk_world: Node3D = null
 func _ready() -> void:
 	_blocks = BlockRegistryScript.new()
 	_ensure_chunk_world()
-	_ensure_debug_fly_controller_node()
 
 func _ensure_chunk_world() -> void:
 	_chunk_world = get_node_or_null("ChunkWorld") as Node3D
@@ -25,18 +22,6 @@ func _ensure_chunk_world() -> void:
 		_chunk_world.name = "ChunkWorld"
 		_chunk_world.set_script(ChunkWorldScript)
 		add_child(_chunk_world)
-
-func _ensure_debug_fly_controller_node() -> void:
-	# Reliable: create a child node with the controller script.
-	# This guarantees _ready/_process run.
-	var existing := player.get_node_or_null("DebugFlyController")
-	if existing != null:
-		return
-
-	var ctrl := Node.new()
-	ctrl.name = "DebugFlyController"
-	ctrl.set_script(DebugFlyControllerScript)
-	player.add_child(ctrl)
 
 func boot_local_singleplayer(server: Node, transport: Node) -> void:
 	_server = server
@@ -54,31 +39,25 @@ func boot_local_singleplayer(server: Node, transport: Node) -> void:
 		Log.error("[client] failed to join world")
 		return
 
-	var spawn_v: Variant = join.get("spawn_pos", Vector3(0, 6, 0))
-	var spawn: Vector3 = Vector3(0, 6, 0)
+	var spawn_v: Variant = join.get("spawn_pos", Vector3(8, 10, 8))
+	var spawn: Vector3 = Vector3(8, 10, 8)
 	if typeof(spawn_v) == TYPE_VECTOR3:
 		spawn = spawn_v as Vector3
 
-	player.global_position = spawn
+	(player as Node3D).global_position = spawn
 
+	# Setup world streaming
 	_chunk_world.call("setup", _transport, _blocks, player)
 
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	# IMPORTANT: player controller script must be attached in the editor.
+	# We only call setup(world) here.
+	player.call("setup", _chunk_world)
 
 	Stats.mode = "local"
 	Stats.connected = true
 	Stats.ping_ms = 0
 
-	Log.info("[client] joined; streaming enabled")
-
-func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ESCAPE:
-			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	Log.info("[client] joined; M4 controller active")
 
 func _process(_delta: float) -> void:
 	Stats.fps = int(Engine.get_frames_per_second())
