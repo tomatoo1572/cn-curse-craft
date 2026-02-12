@@ -1,34 +1,36 @@
-extends Node3D
+extends Node
 
 const ServerMainScript = preload("res://server/ServerMain.gd")
 const LocalServerTransportScript = preload("res://server/LocalServerTransport.gd")
 
-@onready var server_root: Node = get_node_or_null("ServerRoot")
-@onready var client_main: Node = get_node_or_null("ClientRoot/ClientMain")
+@onready var server_root: Node = $ServerRoot
+@onready var client_main: Node = $ClientRoot/ClientMain
+@onready var player: Node3D = $ClientRoot/ClientMain/Player
+@onready var chunk_world: Node = $ClientRoot/ClientMain/ChunkWorld
 
 var _server: Node = null
 var _transport: Node = null
 
 func _ready() -> void:
-	if server_root == null:
-		push_error("Main.tscn is missing 'ServerRoot' under the root node.")
-		return
-	if client_main == null:
-		push_error("Main.tscn is missing 'ClientRoot/ClientMain' (check names/hierarchy).")
-		return
-
 	Stats.reset_placeholders()
 	Stats.mode = "local"
 
 	_server = ServerMainScript.new()
 	server_root.add_child(_server)
-	_server.call("start", Config.target_tick_rate)
 
 	_transport = LocalServerTransportScript.new()
 	server_root.add_child(_transport)
 	_transport.call("bind_to_server", _server)
 
-	client_main.call("boot_local_singleplayer", _server, _transport)
+	client_main.call("bind_transport", _transport)
+	_transport.call("connect_client", client_main)
 
-	Log.info("[main] boot complete")
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	# Give player world queries for collision/raycast
+	player.call("setup", chunk_world)
+
+	# ✅ Spawn above the flat terrain (terrain top is y=3)
+	# Player is a CharacterBody3D with feet at its origin, so set y safely above.
+	player.global_position = Vector3(8.0, 6.0, 8.0)
+
+	# Chunk streaming
+	chunk_world.call("setup", _transport, null, player)

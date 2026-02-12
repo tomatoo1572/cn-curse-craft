@@ -6,11 +6,11 @@
 script = ExtResource("1_ld4td")
 
 [node name="Panel" type="Panel" parent="." unique_id=1586013713]
-anchors_preset = -1
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 370.0
 offset_bottom = 190.0
+mouse_filter = 2
 
 [node name="Margin" type="MarginContainer" parent="Panel" unique_id=2145846923]
 layout_mode = 0

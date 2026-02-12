@@ -1,18 +1,19 @@
 extends CharacterBody3D
 class_name PlayerController
 
+signal request_break(cell: Vector3i)
+signal request_place(place_cell: Vector3i)
+
 @export var mouse_sensitivity: float = 0.003
 @export var walk_speed: float = 6.5
 @export var sprint_multiplier: float = 1.6
 @export var gravity: float = 24.0
 @export var jump_velocity: float = 8.5
 
-# Player collision box (Minecraft-ish)
 @export var half_width: float = 0.30
 @export var height: float = 1.80
 @export var step_height: float = 0.55
 
-# Ray reach for block targeting
 @export var reach: float = 6.0
 @export var eye_height: float = 1.62
 
@@ -35,7 +36,6 @@ func _ready() -> void:
 		push_error("PlayerController: missing Camera3D child")
 		return
 
-	# Ensure camera at eye height (child-local)
 	cam.position = Vector3(0.0, eye_height, 0.0)
 
 	_yaw = rotation.y
@@ -63,19 +63,39 @@ func _add_key_action(action: String, keycode: Key) -> void:
 	ev.keycode = keycode
 	InputMap.action_add_event(action, ev)
 
-# Use _input so mouse look works even with UI present
+# Escape/menu behavior can live in _input
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		var e := event as InputEventKey
 		if e.keycode == Key.KEY_ESCAPE:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 
+# Gameplay input MUST be in _unhandled_input so UI can't swallow it
+func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT:
-			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
-	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		# First left click captures mouse
+		if mb.button_index == MOUSE_BUTTON_LEFT and Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
+			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+			return
+
+		if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+			if mb.button_index == MOUSE_BUTTON_LEFT:
+				if Stats.has_hover:
+					Log.info("[CLIENT] break request %s" % [str(Stats.hovered_cell)])
+					request_break.emit(Stats.hovered_cell)
+				else:
+					Log.info("[CLIENT] break click but no hover")
+
+			elif mb.button_index == MOUSE_BUTTON_RIGHT:
+				if Stats.has_hover:
+					Log.info("[CLIENT] place request %s" % [str(Stats.hovered_place_cell)])
+					request_place.emit(Stats.hovered_place_cell)
+				else:
+					Log.info("[CLIENT] place click but no hover")
+
+	elif event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		var mm := event as InputEventMouseMotion
 		_yaw -= mm.relative.x * mouse_sensitivity
 		_pitch -= mm.relative.y * mouse_sensitivity
@@ -94,7 +114,6 @@ func _physics_process(delta: float) -> void:
 	Stats.player_pos = global_position
 	Stats.camera_pos = cam.global_position
 
-	# Movement input
 	var input_x: float = 0.0
 	var input_z: float = 0.0
 	if Input.is_action_pressed("move_forward"):
@@ -115,7 +134,6 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_pressed("move_sprint"):
 		speed *= sprint_multiplier
 
-	# Yaw-only basis (Minecraft-style)
 	var yaw_basis: Basis = Basis(Vector3.UP, _yaw)
 	var forward: Vector3 = -yaw_basis.z
 	var right: Vector3 = yaw_basis.x
@@ -125,14 +143,11 @@ func _physics_process(delta: float) -> void:
 		velocity.x = desired.x
 		velocity.z = desired.z
 	else:
-		# Hard stop: eliminates drift
 		velocity.x = 0.0
 		velocity.z = 0.0
 
-	# Gravity
 	velocity.y -= gravity * delta
 
-	# Jump
 	if Input.is_action_just_pressed("move_jump"):
 		_wish_jump = true
 
@@ -143,7 +158,7 @@ func _physics_process(delta: float) -> void:
 		_on_ground = false
 	_wish_jump = false
 
-# ---------------- Voxel collision ----------------
+# ---------------- Collision ----------------
 
 func _move_with_voxel_collision(delta: float) -> void:
 	var pos: Vector3 = global_position
@@ -157,7 +172,6 @@ func _move_with_voxel_collision(delta: float) -> void:
 	var before_y: float = pos.y
 	pos = _move_axis(pos, Vector3(0.0, attempted.y, 0.0), 1)
 
-	# If we were moving down and got pushed up, we're grounded
 	if attempted.y < 0.0 and pos.y > before_y + attempted.y + 0.0001:
 		_on_ground = true
 		velocity.y = 0.0
@@ -172,7 +186,6 @@ func _move_axis(pos: Vector3, delta_move: Vector3, axis: int) -> Vector3:
 	if not _aabb_hits_solid(new_pos):
 		return new_pos
 
-	# Step-up only for horizontal movement
 	if axis != 1 and abs(delta_move.y) < 0.00001 and (abs(delta_move.x) > 0.00001 or abs(delta_move.z) > 0.00001):
 		var stepped: Vector3 = pos
 		stepped.y += step_height
@@ -181,7 +194,6 @@ func _move_axis(pos: Vector3, delta_move: Vector3, axis: int) -> Vector3:
 			if not _aabb_hits_solid(stepped_move):
 				return stepped_move
 
-	# Binary search to get as close as possible without penetrating
 	var lo: float = 0.0
 	var hi: float = 1.0
 	for _i in range(10):
@@ -194,7 +206,6 @@ func _move_axis(pos: Vector3, delta_move: Vector3, axis: int) -> Vector3:
 
 	var resolved: Vector3 = pos.lerp(new_pos, lo)
 
-	# Cancel velocity on that axis
 	if axis == 0:
 		velocity.x = 0.0
 	elif axis == 1:
@@ -227,13 +238,11 @@ func _aabb_hits_solid(center_pos: Vector3) -> bool:
 					return true
 	return false
 
-# ---------------- Highlight (Minecraft-style) ----------------
+# ---------------- Highlight + Minecraft DDA raycast ----------------
 
 func _create_highlight() -> void:
 	_highlight = MeshInstance3D.new()
 	_highlight.name = "BlockHighlight"
-
-	# KEY: ignore parent transforms -> world-aligned selection like Minecraft
 	_highlight.top_level = true
 
 	var bm := BoxMesh.new()
@@ -246,8 +255,6 @@ func _create_highlight() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.12)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.wireframe = true  # optional but helps "Minecraft selection" feel
-
 	_highlight.set_surface_override_material(0, mat)
 
 	add_child(_highlight)
@@ -275,9 +282,7 @@ func _update_highlight() -> void:
 	var place: Vector3i = cell + normal
 
 	var center: Vector3 = Vector3(float(cell.x) + 0.5, float(cell.y) + 0.5, float(cell.z) + 0.5)
-
 	_highlight.visible = true
-	# Force axis-aligned transform every frame
 	_highlight.global_transform = Transform3D(Basis(), center)
 
 	Stats.has_hover = true
@@ -285,14 +290,11 @@ func _update_highlight() -> void:
 	Stats.hovered_face_normal = normal
 	Stats.hovered_place_cell = place
 
-# Minecraft-style grid stepping raycast:
-# Returns the first SOLID block we enter and the face normal we crossed to enter it.
 func _minecraft_voxel_raycast(origin: Vector3, direction: Vector3, max_dist: float) -> Dictionary:
 	var dir: Vector3 = direction.normalized()
 	if dir.length_squared() < 0.000001:
 		return {}
 
-	# Nudge forward to avoid starting on exact voxel boundary
 	var o: Vector3 = origin + dir * 0.0001
 
 	var x: int = int(floor(o.x))

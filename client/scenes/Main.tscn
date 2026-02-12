@@ -1,9 +1,11 @@
 [gd_scene format=3 uid="uid://dh0ewunxu642y"]
 
 [ext_resource type="Script" uid="uid://b444x72ccgt7y" path="res://client/scenes/Main.gd" id="1_vry3p"]
+[ext_resource type="Script" uid="uid://clnejkoj4rss5" path="res://server/world/WorldState.gd" id="2_ci4tg"]
 [ext_resource type="Script" uid="uid://btse0gw104k0w" path="res://client/ClientMain.gd" id="2_qagc2"]
 [ext_resource type="Script" uid="uid://dx8vnjmxp2w0q" path="res://client/player/PlayerController.gd" id="3_61aeb"]
 [ext_resource type="PackedScene" uid="uid://d17o0bh8ugfsl" path="res://client/ui/DebugOverlay.tscn" id="3_qagc2"]
+[ext_resource type="Script" uid="uid://bd655qlhc61d2" path="res://client/voxel/ChunkWorld.gd" id="4_enqi2"]
 [ext_resource type="PackedScene" uid="uid://bgj5joj3rl5t4" path="res://client/ui/Crosshair.tscn" id="5_o416a"]
 [ext_resource type="Script" uid="uid://tdoqye7uhcsk" path="res://client/ui/Crosshair.gd" id="6_488fb"]
 
@@ -13,6 +15,9 @@
 script = ExtResource("1_vry3p")
 
 [node name="ServerRoot" type="Node" parent="." unique_id=1039749820]
+
+[node name="WorldState" type="Node" parent="ServerRoot" unique_id=1529740121]
+script = ExtResource("2_ci4tg")
 
 [node name="ClientRoot" type="Node3D" parent="." unique_id=325835354]
 
@@ -29,6 +34,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 transform = Transform3D(50, 0, 0, 0, 1, 0, 0, 0, 50, 0, 0, 0)
 visible = false
 mesh = SubResource("PlaneMesh_qagc2")
+
+[node name="ChunkWorld" type="Node3D" parent="ClientRoot/ClientMain" unique_id=1562088749]
+script = ExtResource("4_enqi2")
 
 [node name="DebugOverlay" parent="." unique_id=775984326 instance=ExtResource("3_qagc2")]
 

@@ -176,7 +176,9 @@ func _request_mesh_build(cx: int, cz: int, bytes: PackedByteArray) -> void:
 	_mesh_pending[k] = true
 	_mesh_jobs_in_flight += 1
 
-	var task: Callable = Callable(self, "_mesh_task").bind(cx, cz, k, bytes)
+	# snapshot for worker thread
+	var bytes_snapshot: PackedByteArray = bytes.duplicate()
+	var task: Callable = Callable(self, "_mesh_task").bind(cx, cz, k, bytes_snapshot)
 	WorkerThreadPool.add_task(task)
 
 func _mesh_task(cx: int, cz: int, key: String, bytes: PackedByteArray) -> void:
@@ -202,8 +204,8 @@ func _key(cx: int, cz: int) -> String:
 	return "%d,%d" % [cx, cz]
 
 # -------------------------------------------------------------------
-# M4: world block query for collision + raycast
-# Only subchunk y=0 exists right now (y 0..15). Everything else is air.
+# Block query for collision + raycast
+# Only subchunk y=0 exists right now (y 0..15).
 # -------------------------------------------------------------------
 func get_block_id_world(x: int, y: int, z: int) -> int:
 	if y < 0 or y >= 16:
@@ -223,8 +225,70 @@ func get_block_id_world(x: int, y: int, z: int) -> int:
 		return 0
 
 	var bytes: PackedByteArray = _chunk_bytes[key] as PackedByteArray
-	# index: x + z*16 + y*256
 	var idx: int = lx + (lz * 16) + (y * 256)
 	if idx < 0 or idx >= bytes.size():
 		return 0
 	return int(bytes[idx])
+
+# -------------------------------------------------------------------
+# M5: apply authoritative delta from server + remesh affected chunk(s)
+# -------------------------------------------------------------------
+func set_block_id_world(x: int, y: int, z: int, id: int) -> void:
+	if y < 0 or y >= 16:
+		return
+
+	var cx: int = int(floor(float(x) / 16.0))
+	var cz: int = int(floor(float(z) / 16.0))
+	var lx: int = x - (cx * 16)
+	var lz: int = z - (cz * 16)
+	if lx < 0:
+		lx += 16
+	if lz < 0:
+		lz += 16
+
+	var key: String = _key(cx, cz)
+	if not _chunk_bytes.has(key):
+		return
+
+	# IMPORTANT: write back to dictionary after mutation
+	var bytes: PackedByteArray = _chunk_bytes[key] as PackedByteArray
+	var idx: int = lx + (lz * 16) + (y * 256)
+	if idx < 0 or idx >= bytes.size():
+		return
+
+	bytes[idx] = clamp(id, 0, 255)
+	_chunk_bytes[key] = bytes
+
+func apply_block_delta_world(x: int, y: int, z: int, id: int) -> void:
+	set_block_id_world(x, y, z, id)
+
+	var cx: int = int(floor(float(x) / 16.0))
+	var cz: int = int(floor(float(z) / 16.0))
+
+	_remesh_if_loaded(cx, cz)
+
+	var lx: int = x - (cx * 16)
+	var lz: int = z - (cz * 16)
+	if lx < 0:
+		lx += 16
+	if lz < 0:
+		lz += 16
+
+	if lx == 0:
+		_remesh_if_loaded(cx - 1, cz)
+	elif lx == 15:
+		_remesh_if_loaded(cx + 1, cz)
+
+	if lz == 0:
+		_remesh_if_loaded(cx, cz - 1)
+	elif lz == 15:
+		_remesh_if_loaded(cx, cz + 1)
+
+func _remesh_if_loaded(cx: int, cz: int) -> void:
+	var key: String = _key(cx, cz)
+	if not _chunk_bytes.has(key):
+		return
+	if not _renderers.has(key):
+		return
+	var bytes: PackedByteArray = _chunk_bytes[key] as PackedByteArray
+	_request_mesh_build(cx, cz, bytes)

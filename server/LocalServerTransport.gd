@@ -1,41 +1,37 @@
 extends Node
+class_name LocalServerTransport
 
-var server: Node = null
+var _server: Node = null
+var _client: Node = null
 
-func bind_to_server(s: Node) -> void:
-	server = s
-	Log.info("[transport] bound to local server")
+func bind_to_server(server: Node) -> void:
+	_server = server
+	if _server != null and _server.has_signal("block_delta"):
+		_server.block_delta.connect(_on_server_block_delta)
 
-func request_join_world() -> Dictionary:
-	return {
-		"ok": true,
-		"seed": 12345,
-		"spawn_pos": Vector3(8, 6, 8)
-	}
+func connect_client(client: Node) -> void:
+	_client = client
+	Stats.connected = true
+	Stats.ping_ms = 0
 
+# ---------------- Existing streaming API ----------------
 func request_chunk(cx: int, cz: int) -> Dictionary:
-	if server == null:
-		return {"ok": false, "pending": false, "error": "no_server"}
+	if _server == null:
+		return {"ok": false}
+	return _server.call("request_chunk", cx, cz)
 
-	var ws: Node = server.get_node_or_null("WorldState")
-	if ws == null:
-		return {"ok": false, "pending": false, "error": "no_world_state"}
+# ---------------- M5 edit requests ----------------
+func client_request_break(cell: Vector3i, player_pos: Vector3) -> void:
+	if _server == null:
+		return
+	_server.call("handle_break_request", cell, player_pos)
 
-	var resp_v: Variant = ws.call("request_subchunk0_bytes", cx, cz)
-	if typeof(resp_v) != TYPE_DICTIONARY:
-		return {"ok": false, "pending": false, "error": "bad_world_state_resp"}
+func client_request_place(place_cell: Vector3i, block_id: int, player_pos: Vector3) -> void:
+	if _server == null:
+		return
+	_server.call("handle_place_request", place_cell, block_id, player_pos)
 
-	var resp: Dictionary = resp_v as Dictionary
-
-	# Pass through pending/ok
-	if resp.get("pending", false):
-		return {"ok": false, "pending": true}
-
-	if not resp.get("ok", false):
-		return {"ok": false, "pending": false, "error": "gen_failed"}
-
-	var bytes_v: Variant = resp.get("bytes", PackedByteArray())
-	if typeof(bytes_v) != TYPE_PACKED_BYTE_ARRAY:
-		return {"ok": false, "pending": false, "error": "bad_bytes"}
-
-	return {"ok": true, "pending": false, "cx": cx, "cz": cz, "sub_y": 0, "bytes": (bytes_v as PackedByteArray)}
+func _on_server_block_delta(x: int, y: int, z: int, id: int) -> void:
+	if _client == null:
+		return
+	_client.call("receive_block_delta", x, y, z, id)

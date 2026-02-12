@@ -1,34 +1,102 @@
 extends Node
+class_name WorldState
 
-const WorldGenFlatScript = preload("res://server/world/WorldGenFlat.gd")
+const CHUNK_BYTES_LEN: int = 16 * 16 * 16
 
-# key "cx,cz" -> PackedByteArray (subchunk 0 only for now)
-var _chunk_bytes: Dictionary = {}
+@export var world_seed: int = 12345
+
+# key "cx,cz" -> PackedByteArray (y 0..15 only)
+var _chunks: Dictionary = {}
+
+# key -> true while generating
 var _pending: Dictionary = {}
 
-func request_subchunk0_bytes(cx: int, cz: int) -> Dictionary:
-	var key: String = "%d,%d" % [cx, cz]
+func request_chunk(cx: int, cz: int) -> Dictionary:
+	var k: String = _key(cx, cz)
+	if _chunks.has(k):
+		return {"ok": true, "bytes": (_chunks[k] as PackedByteArray).duplicate()}
 
-	if _chunk_bytes.has(key):
-		return {"ok": true, "pending": false, "bytes": _chunk_bytes[key]}
+	if _pending.has(k):
+		return {"pending": true}
 
-	if _pending.has(key):
-		return {"ok": false, "pending": true}
+	_pending[k] = true
+	var task := Callable(self, "_gen_task").bind(cx, cz, k)
+	WorkerThreadPool.add_task(task)
+	return {"pending": true}
 
-	# Not generated yet: enqueue async job
-	_pending[key] = true
+func _gen_task(cx: int, cz: int, key: String) -> void:
+	var bytes := _generate_flat_chunk_bytes(cx, cz)
+	Callable(self, "_on_gen_done").call_deferred(key, bytes)
 
-	var callable: Callable = Callable(self, "_gen_task").bind(cx, cz, key)
-	WorkerThreadPool.add_task(callable)
-
-	return {"ok": false, "pending": true}
-
-func _gen_task(_cx: int, _cz: int, key: String) -> void:
-	# Worker thread: generate bytes (pure data), then defer storing to main thread.
-	var bytes: PackedByteArray = WorldGenFlatScript.generate_subchunk_0_bytes()
-	Callable(self, "_finish_gen").call_deferred(key, bytes)
-
-func _finish_gen(key: String, bytes: PackedByteArray) -> void:
-	# Main thread
-	_chunk_bytes[key] = bytes
+func _on_gen_done(key: String, bytes: PackedByteArray) -> void:
 	_pending.erase(key)
+	_chunks[key] = bytes
+
+func _generate_flat_chunk_bytes(_cx: int, _cz: int) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.resize(CHUNK_BYTES_LEN)
+
+	for y in range(0, 16):
+		for z in range(0, 16):
+			for x in range(0, 16):
+				var idx: int = x + (z * 16) + (y * 256)
+				var id: int = 0
+				if y <= 2:
+					id = 1
+				elif y == 3:
+					id = 2
+				b[idx] = id
+	return b
+
+func get_block_id_world(x: int, y: int, z: int) -> int:
+	if y < 0 or y >= 16:
+		return 0
+
+	var cx: int = int(floor(float(x) / 16.0))
+	var cz: int = int(floor(float(z) / 16.0))
+	var lx: int = x - (cx * 16)
+	var lz: int = z - (cz * 16)
+	if lx < 0:
+		lx += 16
+	if lz < 0:
+		lz += 16
+
+	var key: String = _key(cx, cz)
+	if not _chunks.has(key):
+		return 0
+
+	var bytes: PackedByteArray = _chunks[key] as PackedByteArray
+	var idx: int = lx + (lz * 16) + (y * 256)
+	if idx < 0 or idx >= bytes.size():
+		return 0
+	return int(bytes[idx])
+
+func set_block_id_world(x: int, y: int, z: int, id: int) -> void:
+	if y < 0 or y >= 16:
+		return
+
+	var cx: int = int(floor(float(x) / 16.0))
+	var cz: int = int(floor(float(z) / 16.0))
+	var lx: int = x - (cx * 16)
+	var lz: int = z - (cz * 16)
+	if lx < 0:
+		lx += 16
+	if lz < 0:
+		lz += 16
+
+	var key: String = _key(cx, cz)
+	if not _chunks.has(key):
+		_chunks[key] = _generate_flat_chunk_bytes(cx, cz)
+		_pending.erase(key)
+
+	# IMPORTANT: write back after mutation
+	var bytes: PackedByteArray = _chunks[key] as PackedByteArray
+	var idx: int = lx + (lz * 16) + (y * 256)
+	if idx < 0 or idx >= bytes.size():
+		return
+
+	bytes[idx] = clamp(id, 0, 255)
+	_chunks[key] = bytes
+
+func _key(cx: int, cz: int) -> String:
+	return "%d,%d" % [cx, cz]

@@ -1,70 +1,101 @@
 extends Node3D
+class_name ChunkRenderer
+
+var _cx: int = 0
+var _cz: int = 0
 
 var _opaque_mi: MeshInstance3D
-var _trans_mi: MeshInstance3D
+var _transparent_mi: MeshInstance3D
 
 var _opaque_mat: StandardMaterial3D
-var _trans_mat: StandardMaterial3D
+var _transparent_mat: StandardMaterial3D
 
 func _ready() -> void:
-	_ensure_children()
-	_build_materials()
+	# Children are created in code so the scene stays minimal.
+	_opaque_mi = MeshInstance3D.new()
+	_opaque_mi.name = "Opaque"
+	add_child(_opaque_mi)
+
+	_transparent_mi = MeshInstance3D.new()
+	_transparent_mi.name = "Transparent"
+	add_child(_transparent_mi)
+
+	# Simple placeholder materials (we'll swap to atlas textures later)
+	_opaque_mat = StandardMaterial3D.new()
+	_opaque_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_opaque_mat.albedo_color = Color(0.45, 0.45, 0.48, 1.0)
+	_opaque_mat.cull_mode = BaseMaterial3D.CULL_BACK
+
+	_transparent_mat = StandardMaterial3D.new()
+	_transparent_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_transparent_mat.albedo_color = Color(0.75, 0.75, 0.80, 0.35)
+	_transparent_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_transparent_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_transparent_mat.no_depth_test = false
 
 func set_chunk_coords(cx: int, cz: int) -> void:
-	# Keep renderer at chunk origin. Mesh vertices are local (0..16).
-	global_position = Vector3(float(cx * 16), 0.0, float(cz * 16))
+	_cx = cx
+	_cz = cz
+	position = Vector3(float(cx * 16), 0.0, float(cz * 16))
 
-func apply_mesh_arrays(opaque: Dictionary, transparent: Dictionary) -> void:
-	# Build ArrayMesh on main thread only.
-	_apply_one(_opaque_mi, _opaque_mat, opaque)
-	_apply_one(_trans_mi, _trans_mat, transparent)
+# opaque_data and transparent_data are dictionaries produced by MesherGreedy
+# They can be either:
+# - {"arrays": <Array sized Mesh.ARRAY_MAX>}
+# OR
+# - {"verts": PackedVector3Array, "normals": PackedVector3Array, "uvs": PackedVector2Array, "indices": PackedInt32Array}
+func apply_mesh_arrays(opaque_data: Dictionary, transparent_data: Dictionary) -> void:
+	_apply_one(_opaque_mi, opaque_data, _opaque_mat)
+	_apply_one(_transparent_mi, transparent_data, _transparent_mat)
 
-func _apply_one(mi: MeshInstance3D, mat: Material, data: Dictionary) -> void:
-	if not data.has("arrays"):
+func _apply_one(mi: MeshInstance3D, data: Dictionary, mat: Material) -> void:
+	if data.is_empty():
 		mi.mesh = null
 		return
 
-	var arrays_v: Variant = data["arrays"]
-	if typeof(arrays_v) != TYPE_ARRAY:
+	var arrays: Array = _extract_arrays(data)
+	if arrays.is_empty():
 		mi.mesh = null
 		return
 
-	var arrays: Array = arrays_v as Array
-	var verts_v: Variant = arrays[Mesh.ARRAY_VERTEX]
-	if typeof(verts_v) != TYPE_PACKED_VECTOR3_ARRAY:
-		mi.mesh = null
-		return
-
-	var verts: PackedVector3Array = verts_v as PackedVector3Array
-	if verts.size() == 0:
-		mi.mesh = null
-		return
-
+	# IMPORTANT: replace mesh entirely every time (no accumulating surfaces)
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-
+	mesh.surface_set_material(0, mat)
 	mi.mesh = mesh
-	mi.set_surface_override_material(0, mat)
 
-func _ensure_children() -> void:
-	_opaque_mi = get_node_or_null("Opaque") as MeshInstance3D
-	if _opaque_mi == null:
-		_opaque_mi = MeshInstance3D.new()
-		_opaque_mi.name = "Opaque"
-		add_child(_opaque_mi)
+func _extract_arrays(data: Dictionary) -> Array:
+	# Case A: caller already provided Godot arrays format
+	if data.has("arrays") and typeof(data["arrays"]) == TYPE_ARRAY:
+		var a: Array = data["arrays"]
+		return a
 
-	_trans_mi = get_node_or_null("Transparent") as MeshInstance3D
-	if _trans_mi == null:
-		_trans_mi = MeshInstance3D.new()
-		_trans_mi.name = "Transparent"
-		add_child(_trans_mi)
+	# Case B: build arrays from component fields
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
 
-func _build_materials() -> void:
-	_opaque_mat = StandardMaterial3D.new()
-	_opaque_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	_opaque_mat.albedo_color = Color(0.65, 0.65, 0.70)
+	var verts_v: Variant = data.get("verts", PackedVector3Array())
+	var norms_v: Variant = data.get("normals", PackedVector3Array())
+	var uvs_v: Variant = data.get("uvs", PackedVector2Array())
+	var cols_v: Variant = data.get("colors", PackedColorArray())
+	var idx_v: Variant = data.get("indices", PackedInt32Array())
 
-	_trans_mat = StandardMaterial3D.new()
-	_trans_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_trans_mat.albedo_color = Color(0.7, 0.9, 1.0, 0.35)
-	_trans_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var verts: PackedVector3Array = (verts_v as PackedVector3Array) if typeof(verts_v) == TYPE_PACKED_VECTOR3_ARRAY else PackedVector3Array()
+	var norms: PackedVector3Array = (norms_v as PackedVector3Array) if typeof(norms_v) == TYPE_PACKED_VECTOR3_ARRAY else PackedVector3Array()
+	var uvs: PackedVector2Array = (uvs_v as PackedVector2Array) if typeof(uvs_v) == TYPE_PACKED_VECTOR2_ARRAY else PackedVector2Array()
+	var cols: PackedColorArray = (cols_v as PackedColorArray) if typeof(cols_v) == TYPE_PACKED_COLOR_ARRAY else PackedColorArray()
+	var idx: PackedInt32Array = (idx_v as PackedInt32Array) if typeof(idx_v) == TYPE_PACKED_INT32_ARRAY else PackedInt32Array()
+
+	if verts.is_empty():
+		return []
+
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	if not norms.is_empty():
+		arrays[Mesh.ARRAY_NORMAL] = norms
+	if not uvs.is_empty():
+		arrays[Mesh.ARRAY_TEX_UV] = uvs
+	if not cols.is_empty():
+		arrays[Mesh.ARRAY_COLOR] = cols
+	if not idx.is_empty():
+		arrays[Mesh.ARRAY_INDEX] = idx
+
+	return arrays
