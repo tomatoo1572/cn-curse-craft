@@ -1,38 +1,85 @@
 extends CanvasLayer
+class_name DebugOverlay
 
-@onready var panel: Control = $Panel
-@onready var label: Label = $Panel/Margin/Label
+@onready var _label: Label = _find_label()
+
+func _find_label() -> Label:
+	# Your scene might be Panel/Margin/Label (your screenshot)
+	var a: Node = get_node_or_null("Panel/Margin/Label")
+	if a != null and a is Label:
+		return a as Label
+
+	# Some people use Panel/MarginContainer/Label
+	var b: Node = get_node_or_null("Panel/MarginContainer/Label")
+	if b != null and b is Label:
+		return b as Label
+
+	# Fallback: try to find any Label under this overlay
+	for child in get_children():
+		if child is Label:
+			return child as Label
+
+	return null
 
 func _ready() -> void:
-	# IMPORTANT: UI must not steal mouse input
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if $Panel/Margin is Control:
-		($Panel/Margin as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Make sure UI never steals clicks
+	if self is CanvasLayer:
+		for n in get_children():
+			if n is Control:
+				(n as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-func _process(_delta: float) -> void:
-	var hit_block_str := "-"
-	var hit_face_str := "-"
-	var place_block_str := "-"
+func _process(delta: float) -> void:
+	if _label == null:
+		return
 
-	if Stats.has_hover:
-		hit_block_str = "%d, %d, %d" % [Stats.hovered_cell.x, Stats.hovered_cell.y, Stats.hovered_cell.z]
-		hit_face_str = "%d, %d, %d" % [Stats.hovered_face_normal.x, Stats.hovered_face_normal.y, Stats.hovered_face_normal.z]
-		place_block_str = "%d, %d, %d" % [Stats.hovered_place_cell.x, Stats.hovered_place_cell.y, Stats.hovered_place_cell.z]
+	var fps: int = Engine.get_frames_per_second()
+	if fps <= 0:
+		# fallback estimate (rare)
+		fps = int(round(1.0 / max(delta, 0.000001)))
 
-	label.text = (
-		"CN CurseCraft — Voxel Core (M4)\n"
-		+ "Mode: %s   Connected: %s   Ping: %dms\n" % [Stats.mode, str(Stats.connected), Stats.ping_ms]
-		+ "FPS: %d\n\n" % [Stats.fps]
-		+ "Chunks Loaded: %d\n" % [Stats.chunks_loaded]
-		+ "Subchunks Loaded: %d\n"
-		% [Stats.subchunks_loaded]
-		+ "Chunk Gen Queue: %d\n" % [Stats.chunk_gen_jobs_in_queue]
-		+ "Mesh Jobs In Flight: %d\n\n" % [Stats.mesh_jobs_in_flight]
-		+ "Player Pos: %0.3f, %0.3f, %0.3f\n" % [Stats.player_pos.x, Stats.player_pos.y, Stats.player_pos.z]
-		+ "Camera Pos: %0.3f, %0.3f, %0.3f\n\n" % [Stats.camera_pos.x, Stats.camera_pos.y, Stats.camera_pos.z]
-		+ "Hit Block (int): %s\n" % hit_block_str
-		+ "Hit Face Normal: %s\n" % hit_face_str
-		+ "Place Block (int): %s\n\n" % place_block_str
-		+ "Controls: WASD move, Mouse look, Space jump, Shift sprint"
-	)
+	var mode: String = str(Stats.mode) if Stats != null else "?"
+	var connected: String = "true"
+	var ping: int = 0
+
+	var vd_line: String = ""
+	if "view_distance_chunks" in Config:
+		vd_line = "\nView Dist (chunks): %d" % int(Config.view_distance_chunks)
+
+	var hover_lines: String = ""
+	if "has_hover" in Stats and Stats.has_hover:
+		hover_lines = "\n\nHit Block (int): %s\nHit Face Normal: %s\nPlace Block (int): %s" % [
+			str(Stats.hovered_cell),
+			str(Stats.hovered_face_normal),
+			str(Stats.hovered_place_cell),
+		]
+	else:
+		hover_lines = "\n\nHit Block (int): -\nHit Face Normal: -\nPlace Block (int): -"
+
+	var player_pos_line: String = ""
+	if "player_pos" in Stats:
+		var p = Stats.player_pos
+		player_pos_line = "\n\nPlayer Pos: %.3f, %.3f, %.3f" % [p.x, p.y, p.z]
+
+	var cam_pos_line: String = ""
+	if "camera_pos" in Stats:
+		var c = Stats.camera_pos
+		cam_pos_line = "\nCamera Pos: %.3f, %.3f, %.3f" % [c.x, c.y, c.z]
+
+	_label.text = (
+		"CN CurseCraft — Voxel Core (M5)\n"
+		+ "Mode: %s   Connected: %s   Ping: %dms\n"
+		+ "FPS: %d"
+		+ vd_line
+		+ "\n\nChunks Loaded: %d\nSubchunks Loaded: %d\nChunk Gen Queue: %d\nMesh Jobs In Flight: %d"
+		+ player_pos_line
+		+ cam_pos_line
+		+ hover_lines
+		+ "\n\nControls: WASD move, Mouse look, Space jump, Shift sprint"
+	) % [
+		mode, connected, ping,
+		fps,
+		int(Stats.chunks_loaded),
+		int(Stats.subchunks_loaded),
+		int(Stats.chunk_gen_jobs_in_queue),
+		int(Stats.mesh_jobs_in_flight),
+	]
