@@ -4,6 +4,8 @@
 [ext_resource type="Script" uid="uid://btse0gw104k0w" path="res://client/ClientMain.gd" id="2_qagc2"]
 [ext_resource type="Script" uid="uid://dx8vnjmxp2w0q" path="res://client/player/PlayerController.gd" id="3_61aeb"]
 [ext_resource type="PackedScene" uid="uid://d17o0bh8ugfsl" path="res://client/ui/DebugOverlay.tscn" id="3_qagc2"]
+[ext_resource type="PackedScene" uid="uid://bgj5joj3rl5t4" path="res://client/ui/Crosshair.tscn" id="5_o416a"]
+[ext_resource type="Script" uid="uid://tdoqye7uhcsk" path="res://client/ui/Crosshair.gd" id="6_488fb"]
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_qagc2"]
 
@@ -29,3 +31,6 @@ visible = false
 mesh = SubResource("PlaneMesh_qagc2")
 
 [node name="DebugOverlay" parent="." unique_id=775984326 instance=ExtResource("3_qagc2")]
+
+[node name="Crosshair" parent="." unique_id=2033483516 instance=ExtResource("5_o416a")]
+script = ExtResource("6_488fb")

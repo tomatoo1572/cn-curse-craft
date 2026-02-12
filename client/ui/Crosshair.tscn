@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://bgj5joj3rl5t4"]
+
+[node name="Crosshair" type="CanvasLayer" unique_id=2033483516]
+
+[node name="Center" type="Control" parent="." unique_id=104551081]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="LineH" type="ColorRect" parent="Center" unique_id=1050432480]
+layout_mode = 0
+offset_right = 10.0
+offset_bottom = 2.0
+mouse_filter = 2
+
+[node name="LineV" type="ColorRect" parent="Center" unique_id=499017970]
+layout_mode = 0
+offset_right = 2.0
+offset_bottom = 10.0
+mouse_filter = 2

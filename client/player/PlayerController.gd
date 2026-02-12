@@ -7,10 +7,12 @@ class_name PlayerController
 @export var gravity: float = 24.0
 @export var jump_velocity: float = 8.5
 
+# Player collision box (Minecraft-ish)
 @export var half_width: float = 0.30
 @export var height: float = 1.80
 @export var step_height: float = 0.55
 
+# Ray reach for block targeting
 @export var reach: float = 6.0
 @export var eye_height: float = 1.62
 
@@ -33,6 +35,7 @@ func _ready() -> void:
 		push_error("PlayerController: missing Camera3D child")
 		return
 
+	# Ensure camera at eye height (child-local)
 	cam.position = Vector3(0.0, eye_height, 0.0)
 
 	_yaw = rotation.y
@@ -60,7 +63,8 @@ func _add_key_action(action: String, keycode: Key) -> void:
 	ev.keycode = keycode
 	InputMap.action_add_event(action, ev)
 
-func _unhandled_input(event: InputEvent) -> void:
+# Use _input so mouse look works even with UI present
+func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		var e := event as InputEventKey
 		if e.keycode == Key.KEY_ESCAPE:
@@ -90,6 +94,7 @@ func _physics_process(delta: float) -> void:
 	Stats.player_pos = global_position
 	Stats.camera_pos = cam.global_position
 
+	# Movement input
 	var input_x: float = 0.0
 	var input_z: float = 0.0
 	if Input.is_action_pressed("move_forward"):
@@ -110,6 +115,7 @@ func _physics_process(delta: float) -> void:
 	if Input.is_action_pressed("move_sprint"):
 		speed *= sprint_multiplier
 
+	# Yaw-only basis (Minecraft-style)
 	var yaw_basis: Basis = Basis(Vector3.UP, _yaw)
 	var forward: Vector3 = -yaw_basis.z
 	var right: Vector3 = yaw_basis.x
@@ -119,11 +125,14 @@ func _physics_process(delta: float) -> void:
 		velocity.x = desired.x
 		velocity.z = desired.z
 	else:
+		# Hard stop: eliminates drift
 		velocity.x = 0.0
 		velocity.z = 0.0
 
+	# Gravity
 	velocity.y -= gravity * delta
 
+	# Jump
 	if Input.is_action_just_pressed("move_jump"):
 		_wish_jump = true
 
@@ -133,6 +142,8 @@ func _physics_process(delta: float) -> void:
 		velocity.y = jump_velocity
 		_on_ground = false
 	_wish_jump = false
+
+# ---------------- Voxel collision ----------------
 
 func _move_with_voxel_collision(delta: float) -> void:
 	var pos: Vector3 = global_position
@@ -146,6 +157,7 @@ func _move_with_voxel_collision(delta: float) -> void:
 	var before_y: float = pos.y
 	pos = _move_axis(pos, Vector3(0.0, attempted.y, 0.0), 1)
 
+	# If we were moving down and got pushed up, we're grounded
 	if attempted.y < 0.0 and pos.y > before_y + attempted.y + 0.0001:
 		_on_ground = true
 		velocity.y = 0.0
@@ -160,6 +172,7 @@ func _move_axis(pos: Vector3, delta_move: Vector3, axis: int) -> Vector3:
 	if not _aabb_hits_solid(new_pos):
 		return new_pos
 
+	# Step-up only for horizontal movement
 	if axis != 1 and abs(delta_move.y) < 0.00001 and (abs(delta_move.x) > 0.00001 or abs(delta_move.z) > 0.00001):
 		var stepped: Vector3 = pos
 		stepped.y += step_height
@@ -168,6 +181,7 @@ func _move_axis(pos: Vector3, delta_move: Vector3, axis: int) -> Vector3:
 			if not _aabb_hits_solid(stepped_move):
 				return stepped_move
 
+	# Binary search to get as close as possible without penetrating
 	var lo: float = 0.0
 	var hi: float = 1.0
 	for _i in range(10):
@@ -180,6 +194,7 @@ func _move_axis(pos: Vector3, delta_move: Vector3, axis: int) -> Vector3:
 
 	var resolved: Vector3 = pos.lerp(new_pos, lo)
 
+	# Cancel velocity on that axis
 	if axis == 0:
 		velocity.x = 0.0
 	elif axis == 1:
@@ -212,19 +227,27 @@ func _aabb_hits_solid(center_pos: Vector3) -> bool:
 					return true
 	return false
 
-# ---------------- Highlight (face-accurate voxel raycast) ----------------
+# ---------------- Highlight (Minecraft-style) ----------------
 
 func _create_highlight() -> void:
 	_highlight = MeshInstance3D.new()
 	_highlight.name = "BlockHighlight"
+
+	# KEY: ignore parent transforms -> world-aligned selection like Minecraft
+	_highlight.top_level = true
+
 	var bm := BoxMesh.new()
 	bm.size = Vector3(1.02, 1.02, 1.02)
 	_highlight.mesh = bm
 
 	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.no_depth_test = true
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.15)
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.12)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.wireframe = true  # optional but helps "Minecraft selection" feel
+
 	_highlight.set_surface_override_material(0, mat)
 
 	add_child(_highlight)
@@ -237,26 +260,39 @@ func _update_highlight() -> void:
 	var origin: Vector3 = cam.global_position
 	var dir: Vector3 = (-cam.global_transform.basis.z).normalized()
 
-	var hit: Dictionary = _voxel_raycast_face(origin, dir, reach)
+	var hit := _minecraft_voxel_raycast(origin, dir, reach)
 
 	if hit.is_empty():
 		_highlight.visible = false
-		Stats.hovered_block = Vector3.ZERO
+		Stats.has_hover = false
+		Stats.hovered_cell = Vector3i.ZERO
+		Stats.hovered_face_normal = Vector3i.ZERO
+		Stats.hovered_place_cell = Vector3i.ZERO
 		return
 
 	var cell: Vector3i = hit["cell"]
+	var normal: Vector3i = hit["normal"]
+	var place: Vector3i = cell + normal
+
 	var center: Vector3 = Vector3(float(cell.x) + 0.5, float(cell.y) + 0.5, float(cell.z) + 0.5)
 
 	_highlight.visible = true
-	_highlight.global_position = center
-	Stats.hovered_block = center
+	# Force axis-aligned transform every frame
+	_highlight.global_transform = Transform3D(Basis(), center)
 
-func _voxel_raycast_face(origin: Vector3, direction: Vector3, max_dist: float) -> Dictionary:
+	Stats.has_hover = true
+	Stats.hovered_cell = cell
+	Stats.hovered_face_normal = normal
+	Stats.hovered_place_cell = place
+
+# Minecraft-style grid stepping raycast:
+# Returns the first SOLID block we enter and the face normal we crossed to enter it.
+func _minecraft_voxel_raycast(origin: Vector3, direction: Vector3, max_dist: float) -> Dictionary:
 	var dir: Vector3 = direction.normalized()
 	if dir.length_squared() < 0.000001:
 		return {}
 
-	# Nudge avoids starting exactly on voxel boundary
+	# Nudge forward to avoid starting on exact voxel boundary
 	var o: Vector3 = origin + dir * 0.0001
 
 	var x: int = int(floor(o.x))
@@ -276,35 +312,36 @@ func _voxel_raycast_face(origin: Vector3, direction: Vector3, max_dist: float) -
 	var t_delta_z: float = (1.0 / abs(dir.z)) if abs(dir.z) > 0.000001 else 1e30
 
 	var dist: float = 0.0
-	var last_cell := Vector3i(x, y, z)
 
 	while dist <= max_dist:
-		var id: int = int(_world.call("get_block_id_world", x, y, z))
-		if id != 0:
-			# Normal is based on which cell we came from
-			var normal := Vector3i(last_cell.x - x, last_cell.y - y, last_cell.z - z)
-			return {"cell": Vector3i(x, y, z), "normal": normal}
-
-		last_cell = Vector3i(x, y, z)
+		var hit_normal := Vector3i(0, 0, 0)
 
 		if t_max_x < t_max_y:
 			if t_max_x < t_max_z:
 				x += step_x
 				dist = t_max_x
 				t_max_x += t_delta_x
+				hit_normal = Vector3i(-step_x, 0, 0)
 			else:
 				z += step_z
 				dist = t_max_z
 				t_max_z += t_delta_z
+				hit_normal = Vector3i(0, 0, -step_z)
 		else:
 			if t_max_y < t_max_z:
 				y += step_y
 				dist = t_max_y
 				t_max_y += t_delta_y
+				hit_normal = Vector3i(0, -step_y, 0)
 			else:
 				z += step_z
 				dist = t_max_z
 				t_max_z += t_delta_z
+				hit_normal = Vector3i(0, 0, -step_z)
+
+		var id: int = int(_world.call("get_block_id_world", x, y, z))
+		if id != 0:
+			return {"cell": Vector3i(x, y, z), "normal": hit_normal}
 
 	return {}
 
