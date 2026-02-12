@@ -23,6 +23,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 3)
 
 [node name="Ground" type="MeshInstance3D" parent="ClientRoot/ClientMain" unique_id=47676382]
 transform = Transform3D(50, 0, 0, 0, 1, 0, 0, 0, 50, 0, 0, 0)
+visible = false
 mesh = SubResource("PlaneMesh_qagc2")
 
 [node name="DebugOverlay" parent="." unique_id=775984326 instance=ExtResource("3_qagc2")]
