@@ -1,32 +1,36 @@
 extends Node3D
 
-const VoxelChunkScript = preload("res://shared/voxel/VoxelChunk.gd")
 const ChunkRendererScript = preload("res://client/voxel/ChunkRenderer.gd")
+const MesherGreedyScript = preload("res://client/voxel/MesherGreedy.gd")
 
 var _transport: Node = null
-var _blocks = null
 var _player: Node3D = null
 
 # key "cx,cz" -> ChunkRenderer node
 var _renderers: Dictionary = {}
 
-# Desired requests waiting to be sent (Vector2i)
+# key "cx,cz" -> PackedByteArray (subchunk 0)
+var _chunk_bytes: Dictionary = {}
+
+# desired requests waiting to be sent
 var _request_queue: Array[Vector2i] = []
 
-# key -> next_retry_msec (int). If key exists, we are pending and should retry after that time.
+# key -> next_retry_msec
 var _pending_until: Dictionary = {}
 
-# Tuning
+# Mesh jobs
+var _mesh_pending: Dictionary = {}  # key -> true
+var _mesh_jobs_in_flight: int = 0
+
 const REQUESTS_PER_FRAME: int = 4
 const PENDING_RETRY_MS: int = 200
 
-func setup(transport: Node, blocks, player: Node3D) -> void:
+func setup(transport: Node, _blocks_unused, player: Node3D) -> void:
 	_transport = transport
-	_blocks = blocks
 	_player = player
 
 func _process(_delta: float) -> void:
-	if _transport == null or _blocks == null or _player == null:
+	if _transport == null or _player == null:
 		return
 
 	_update_stream_sets()
@@ -36,7 +40,7 @@ func _process(_delta: float) -> void:
 	Stats.chunks_loaded = _renderers.size()
 	Stats.subchunks_loaded = _renderers.size()
 	Stats.chunk_gen_jobs_in_queue = _request_queue.size() + _pending_until.size()
-	Stats.mesh_jobs_in_flight = 0
+	Stats.mesh_jobs_in_flight = _mesh_jobs_in_flight
 
 func _player_chunk() -> Vector2i:
 	var p: Vector3 = _player.global_position
@@ -48,41 +52,37 @@ func _update_stream_sets() -> void:
 	var center: Vector2i = _player_chunk()
 	var vd: int = max(1, Config.view_distance_chunks)
 
-	# Build desired set and a sorted list by distance (near first)
 	var desired: Dictionary = {}
 	var ordered: Array[Vector2i] = []
 
 	for dz in range(-vd, vd + 1):
 		for dx in range(-vd, vd + 1):
-			var c := Vector2i(center.x + dx, center.y + dz)
-			var k := _key(c.x, c.y)
+			var c: Vector2i = Vector2i(center.x + dx, center.y + dz)
+			var k: String = _key(c.x, c.y)
 			desired[k] = true
 			ordered.append(c)
 
-	# Sort by squared distance to center so near chunks load first
 	ordered.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		var da := (a.x - center.x) * (a.x - center.x) + (a.y - center.y) * (a.y - center.y)
-		var db := (b.x - center.x) * (b.x - center.x) + (b.y - center.y) * (b.y - center.y)
+		var da: int = (a.x - center.x) * (a.x - center.x) + (a.y - center.y) * (a.y - center.y)
+		var db: int = (b.x - center.x) * (b.x - center.x) + (b.y - center.y) * (b.y - center.y)
 		return da < db
 	)
 
-	# Enqueue missing (but never duplicate)
-	# We rebuild the queue each frame based on desired set to avoid stale duplicates.
+	# Rebuild request queue (no duplicates)
 	var new_queue: Array[Vector2i] = []
-	for c in ordered:
-		var k2 := _key(c.x, c.y)
+	for c2 in ordered:
+		var k2: String = _key(c2.x, c2.y)
 		if _renderers.has(k2):
 			continue
-		# if pending, don't enqueue; pending will be retried by timer logic
 		if _pending_until.has(k2):
 			continue
-		new_queue.append(c)
-
+		new_queue.append(c2)
 	_request_queue = new_queue
 
-	# Unload chunks no longer desired
+	# Unload far
 	var to_remove: Array[String] = []
-	for k3 in _renderers.keys():
+	for k3_var in _renderers.keys():
+		var k3: String = str(k3_var)
 		if not desired.has(k3):
 			to_remove.append(k3)
 
@@ -91,43 +91,43 @@ func _update_stream_sets() -> void:
 		if is_instance_valid(n):
 			n.queue_free()
 		_renderers.erase(k4)
+		_chunk_bytes.erase(k4)
 		_pending_until.erase(k4)
+		_mesh_pending.erase(k4)
+		# If a mesh job finishes later, we will ignore it safely.
 
 func _process_requests_budgeted() -> void:
 	var now_ms: int = Time.get_ticks_msec()
-
-	# First, retry pending chunks that are due (limited by budget)
 	var budget: int = REQUESTS_PER_FRAME
 
-	# Collect due pending keys
+	# Retry pending due
 	var due: Array[String] = []
-	for k in _pending_until.keys():
+	for k_var in _pending_until.keys():
+		var k: String = str(k_var)
 		var t: int = int(_pending_until[k])
 		if now_ms >= t:
 			due.append(k)
 
-	# Retry due pending (closest first if possible)
-	# We'll just retry in dictionary order for simplicity; good enough for M2.
-	for k in due:
+	for k2 in due:
 		if budget <= 0:
 			break
-		var parts := k.split(",")
+		var parts: PackedStringArray = k2.split(",")
 		if parts.size() != 2:
-			_pending_until.erase(k)
+			_pending_until.erase(k2)
 			continue
 		var cx: int = int(parts[0])
 		var cz: int = int(parts[1])
 		_try_request_chunk(cx, cz, now_ms)
 		budget -= 1
 
-	# Then request new chunks from the queue
+	# Request new
 	while budget > 0 and not _request_queue.is_empty():
 		var c: Vector2i = _request_queue.pop_front()
 		_try_request_chunk(c.x, c.y, now_ms)
 		budget -= 1
 
 func _try_request_chunk(cx: int, cz: int, now_ms: int) -> void:
-	var k := _key(cx, cz)
+	var k: String = _key(cx, cz)
 	if _renderers.has(k):
 		_pending_until.erase(k)
 		return
@@ -139,7 +139,6 @@ func _try_request_chunk(cx: int, cz: int, now_ms: int) -> void:
 
 	var resp: Dictionary = resp_v as Dictionary
 
-	# Pending: set next retry time
 	if resp.get("pending", false):
 		_pending_until[k] = now_ms + PENDING_RETRY_MS
 		return
@@ -153,22 +152,58 @@ func _try_request_chunk(cx: int, cz: int, now_ms: int) -> void:
 	if typeof(bytes_v) != TYPE_PACKED_BYTE_ARRAY:
 		return
 
-	var bytes: PackedByteArray = bytes_v as PackedByteArray
-	var chunk = VoxelChunkScript.from_serialized(cx, cz, bytes, 0)
-	_spawn_renderer_for_chunk(chunk)
+	var bytes: PackedByteArray = (bytes_v as PackedByteArray).duplicate()
+	_on_chunk_bytes_ready(cx, cz, bytes)
 
-func _spawn_renderer_for_chunk(chunk) -> void:
-	var k := _key(chunk.cx, chunk.cz)
+func _on_chunk_bytes_ready(cx: int, cz: int, bytes: PackedByteArray) -> void:
+	var k: String = _key(cx, cz)
+	_chunk_bytes[k] = bytes
+
+	var _r: Node = _ensure_renderer(cx, cz)
+	_request_mesh_build(cx, cz, bytes)
+
+func _ensure_renderer(cx: int, cz: int) -> Node:
+	var k: String = _key(cx, cz)
 	if _renderers.has(k):
-		return
+		return _renderers[k]
 
 	var r := Node3D.new()
-	r.name = "Chunk_%d_%d" % [chunk.cx, chunk.cz]
+	r.name = "Chunk_%d_%d" % [cx, cz]
 	r.set_script(ChunkRendererScript)
 	add_child(r)
+	r.call("set_chunk_coords", cx, cz)
 
-	r.call("render_chunk_sub0", chunk, _blocks)
 	_renderers[k] = r
+	return r
+
+func _request_mesh_build(cx: int, cz: int, bytes: PackedByteArray) -> void:
+	var k: String = _key(cx, cz)
+	if _mesh_pending.has(k):
+		return
+	_mesh_pending[k] = true
+	_mesh_jobs_in_flight += 1
+
+	var task: Callable = Callable(self, "_mesh_task").bind(cx, cz, k, bytes)
+	WorkerThreadPool.add_task(task)
+
+func _mesh_task(cx: int, cz: int, key: String, bytes: PackedByteArray) -> void:
+	var result: Dictionary = MesherGreedyScript.build_mesh_arrays_from_bytes(bytes)
+	Callable(self, "_on_mesh_ready").call_deferred(cx, cz, key, result)
+
+func _on_mesh_ready(_cx: int, _cz: int, key: String, result: Dictionary) -> void:
+	_mesh_jobs_in_flight = max(0, _mesh_jobs_in_flight - 1)
+	_mesh_pending.erase(key)
+
+	if not _renderers.has(key):
+		return
+
+	var r: Node = _renderers[key]
+	if not is_instance_valid(r):
+		return
+
+	var opaque: Dictionary = (result.get("opaque", {}) as Dictionary)
+	var transparent: Dictionary = (result.get("transparent", {}) as Dictionary)
+	r.call("apply_mesh_arrays", opaque, transparent)
 
 func _key(cx: int, cz: int) -> String:
 	return "%d,%d" % [cx, cz]

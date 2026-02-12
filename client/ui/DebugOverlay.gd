@@ -10,7 +10,7 @@ func _process(_delta: float) -> void:
 		return
 
 	var lines: Array[String] = []
-	lines.append("CN CurseCraft — Voxel Core (M2)")
+	lines.append("CN CurseCraft — Voxel Core (M3)")
 	lines.append("Mode: %s   Connected: %s   Ping: %dms" % [Stats.mode, str(Stats.connected), Stats.ping_ms])
 	lines.append("FPS: %d" % Stats.fps)
 	lines.append("View Dist (chunks): %d" % Config.view_distance_chunks)

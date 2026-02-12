@@ -24,24 +24,23 @@ func _ready() -> void:
 
 	_ensure_input_actions()
 
-	# Initialize yaw/pitch from current transforms
 	_yaw = _player.rotation.y
 	_pitch = _camera.rotation.x
 
 func _ensure_input_actions() -> void:
-	_add_key_action("move_forward", KEY_W)
-	_add_key_action("move_back", KEY_S)
-	_add_key_action("move_left", KEY_A)
-	_add_key_action("move_right", KEY_D)
-	_add_key_action("move_up", KEY_E)
-	_add_key_action("move_down", KEY_Q)
-	_add_key_action("move_fast", KEY_SHIFT)
+	_add_key_action("move_forward", Key.KEY_W)
+	_add_key_action("move_back", Key.KEY_S)
+	_add_key_action("move_left", Key.KEY_A)
+	_add_key_action("move_right", Key.KEY_D)
+	_add_key_action("move_up", Key.KEY_E)
+	_add_key_action("move_down", Key.KEY_Q)
+	_add_key_action("move_fast", Key.KEY_SHIFT)
 
-func _add_key_action(action: String, keycode: int) -> void:
+func _add_key_action(action: String, keycode: Key) -> void:
 	if InputMap.has_action(action):
 		return
 	InputMap.add_action(action)
-	var ev := InputEventKey.new()
+	var ev: InputEventKey = InputEventKey.new()
 	ev.keycode = keycode
 	InputMap.action_add_event(action, ev)
 
@@ -79,8 +78,7 @@ func _process(delta: float) -> void:
 		var forward := -_player.global_transform.basis.z
 		var right := _player.global_transform.basis.x
 
-		# FIX: W/S were inverted because dir.z is negative for forward.
-		# Use -dir.z so forward movement goes forward.
+		# W/S correct: use -dir.z
 		var move := (forward * (-dir.z) + right * dir.x) * move_speed * fast * delta
 		_player.global_position += move
 
