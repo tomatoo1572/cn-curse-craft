@@ -1,188 +1,240 @@
 extends RefCounted
-class_name MesherGreedy
+
+const BlockRegistryScript := preload("res://shared/voxel/BlockRegistry.gd")
 
 const SIZE: int = 16
-const LAYER: int = SIZE * SIZE
-const TOTAL: int = SIZE * SIZE * SIZE
+const AREA: int = SIZE * SIZE
+
+static func _idx(x: int, y: int, z: int) -> int:
+	# x + z*16 + y*256
+	return x + (z * SIZE) + (y * SIZE * SIZE)
+
+static func _get_id(bytes: PackedByteArray, x: int, y: int, z: int) -> int:
+	if x < 0 or x >= SIZE:
+		return 0
+	if y < 0 or y >= SIZE:
+		return 0
+	if z < 0 or z >= SIZE:
+		return 0
+	var i: int = _idx(x, y, z)
+	if i < 0 or i >= bytes.size():
+		return 0
+	return int(bytes[i])
 
 static func build_mesh_arrays_from_bytes(bytes: PackedByteArray) -> Dictionary:
-	if bytes.size() < TOTAL:
-		return {"opaque": {}, "transparent": {}}
+	var o_verts: PackedVector3Array = PackedVector3Array()
+	var o_norms: PackedVector3Array = PackedVector3Array()
+	var o_uv: PackedVector2Array = PackedVector2Array()
+	var o_uv2: PackedVector2Array = PackedVector2Array()
+	var o_idx: PackedInt32Array = PackedInt32Array()
 
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var indices := PackedInt32Array()
+	var t_verts: PackedVector3Array = PackedVector3Array()
+	var t_norms: PackedVector3Array = PackedVector3Array()
+	var t_uv: PackedVector2Array = PackedVector2Array()
+	var t_uv2: PackedVector2Array = PackedVector2Array()
+	var t_idx: PackedInt32Array = PackedInt32Array()
 
-	# Greedy meshing across 3 axes
-	for d in range(3):
-		var u: int = (d + 1) % 3
-		var v: int = (d + 2) % 3
+	var mask_id: PackedInt32Array = PackedInt32Array()
+	var mask_sign: PackedInt32Array = PackedInt32Array()
+	mask_id.resize(AREA)
+	mask_sign.resize(AREA)
 
-		var q := Vector3i(0, 0, 0)
-		q[d] = 1
-
-		var mask: Array[int] = []
-		mask.resize(SIZE * SIZE)
-
+	for d in [0, 1, 2]:
 		for slice in range(-1, SIZE):
-			# 1) Build mask for this slice
-			for j in range(SIZE):
-				for i in range(SIZE):
-					var x := Vector3i(0, 0, 0)
-					x[u] = i
-					x[v] = j
-					x[d] = slice
+			# Build mask
+			var n: int = 0
+			for vv in range(0, SIZE):
+				for uu in range(0, SIZE):
+					var x: int = 0
+					var y: int = 0
+					var z: int = 0
 
-					var a: int = 0
-					var b: int = 0
-
-					if slice >= 0:
-						a = _get_voxel(bytes, x.x, x.y, x.z)
-					if slice < SIZE - 1:
-						b = _get_voxel(bytes, x.x + q.x, x.y + q.y, x.z + q.z)
-
-					var mi: int = i + j * SIZE
-					if (a != 0) != (b != 0):
-						# +id => face points +d, -id => face points -d
-						mask[mi] = a if a != 0 else -b
+					if d == 0:
+						x = slice
+						y = vv
+						z = uu
+					elif d == 1:
+						x = uu
+						y = slice
+						z = vv
 					else:
-						mask[mi] = 0
+						x = uu
+						y = vv
+						z = slice
 
-			# 2) Greedy merge rectangles in mask
-			for j in range(SIZE):
-				var i: int = 0
-				while i < SIZE:
-					var idx: int = i + j * SIZE
-					var c: int = mask[idx]
-					if c == 0:
-						i += 1
+					var a: int = _get_id(bytes, x, y, z)
+
+					if d == 0:
+						x = slice + 1
+					elif d == 1:
+						y = slice + 1
+					else:
+						z = slice + 1
+
+					var b: int = _get_id(bytes, x, y, z)
+
+					var id_out: int = 0
+					var sign_out: int = 0
+
+					if a != 0 and b == 0:
+						id_out = a
+						sign_out = 1
+					elif a == 0 and b != 0:
+						id_out = b
+						sign_out = -1
+
+					mask_id[n] = id_out
+					mask_sign[n] = sign_out
+					n += 1
+
+			# Greedy merge rectangles on the mask
+			var j: int = 0
+			for vv0 in range(0, SIZE):
+				for uu0 in range(0, SIZE):
+					var id0: int = int(mask_id[j])
+					var s0: int = int(mask_sign[j])
+
+					if id0 == 0:
+						j += 1
 						continue
 
-					# Width
+					# width
 					var w: int = 1
-					while i + w < SIZE and mask[idx + w] == c:
+					while uu0 + w < SIZE:
+						var jj: int = j + w
+						if int(mask_id[jj]) != id0 or int(mask_sign[jj]) != s0:
+							break
 						w += 1
 
-					# Height
+					# height
 					var h: int = 1
-					while j + h < SIZE:
-						var row_start: int = i + (j + h) * SIZE
-						var ok: bool = true
-						for k in range(w):
-							if mask[row_start + k] != c:
-								ok = false
+					var done: bool = false
+					while vv0 + h < SIZE and not done:
+						for k in range(0, w):
+							var jj2: int = (uu0 + k) + (vv0 + h) * SIZE
+							if int(mask_id[jj2]) != id0 or int(mask_sign[jj2]) != s0:
+								done = true
 								break
-						if not ok:
-							break
-						h += 1
-
-					# Emit quad
-					var x0 := Vector3i(0, 0, 0)
-					x0[u] = i
-					x0[v] = j
-					x0[d] = slice + 1
-
-					var du := Vector3i(0, 0, 0)
-					var dv := Vector3i(0, 0, 0)
-					du[u] = w
-					dv[v] = h
-
-					var backface: bool = (c < 0)
-					var normal: Vector3 = _normal_for_axis(d, backface)
+						if not done:
+							h += 1
 
 					_emit_quad(
-						verts, norms, uvs, indices,
-						Vector3(x0.x, x0.y, x0.z),
-						Vector3(du.x, du.y, du.z),
-						Vector3(dv.x, dv.y, dv.z),
-						normal,
-						backface
+						id0, d, s0,
+						slice, uu0, vv0,
+						w, h,
+						o_verts, o_norms, o_uv, o_uv2, o_idx
 					)
 
-					# Clear rectangle from mask
-					for jj in range(h):
-						for kk in range(w):
-							mask[(i + kk) + (j + jj) * SIZE] = 0
+					# Clear rectangle
+					for dv in range(0, h):
+						for du in range(0, w):
+							var jj3: int = (uu0 + du) + (vv0 + dv) * SIZE
+							mask_id[jj3] = 0
+							mask_sign[jj3] = 0
 
-					i += w
-
-	# Build arrays
-	if verts.is_empty():
-		return {"opaque": {}, "transparent": {}}
-
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_INDEX] = indices
+					j += 1
 
 	return {
-		"opaque": {"arrays": arrays},
-		"transparent": {}
+		"opaque": {
+			"verts": o_verts,
+			"normals": o_norms,
+			"uv": o_uv,
+			"uv2": o_uv2,
+			"indices": o_idx,
+		},
+		"transparent": {
+			"verts": t_verts,
+			"normals": t_norms,
+			"uv": t_uv,
+			"uv2": t_uv2,
+			"indices": t_idx,
+		}
 	}
 
-static func _get_voxel(bytes: PackedByteArray, x: int, y: int, z: int) -> int:
-	if x < 0 or x >= SIZE or y < 0 or y >= SIZE or z < 0 or z >= SIZE:
-		return 0
-	# MUST match ChunkWorld/WorldState indexing
-	var idx: int = x + (z * SIZE) + (y * LAYER)
-	return int(bytes[idx])
-
-static func _normal_for_axis(d: int, backface: bool) -> Vector3:
-	var s: float = -1.0 if backface else 1.0
-	if d == 0:
-		return Vector3(s, 0.0, 0.0)
-	elif d == 1:
-		return Vector3(0.0, s, 0.0)
-	else:
-		return Vector3(0.0, 0.0, s)
-
 static func _emit_quad(
+	id0: int,
+	d: int,
+	face_sign: int, # renamed from "sign" to avoid built-in warning
+	slice: int,
+	uu0: int,
+	vv0: int,
+	w: int,
+	h: int,
 	verts: PackedVector3Array,
 	norms: PackedVector3Array,
-	uvs: PackedVector2Array,
-	indices: PackedInt32Array,
-	p: Vector3,
-	du: Vector3,
-	dv: Vector3,
-	n: Vector3,
-	backface: bool
+	uv: PackedVector2Array,
+	uv2: PackedVector2Array,
+	indices: PackedInt32Array
 ) -> void:
-	var v0: Vector3 = p
-	var v1: Vector3 = p + du
-	var v2: Vector3 = p + du + dv
-	var v3: Vector3 = p + dv
+	var x0: int = 0
+	var y0: int = 0
+	var z0: int = 0
+
+	if d == 0:
+		x0 = slice + 1
+		y0 = vv0
+		z0 = uu0
+	elif d == 1:
+		x0 = uu0
+		y0 = slice + 1
+		z0 = vv0
+	else:
+		x0 = uu0
+		y0 = vv0
+		z0 = slice + 1
+
+	var du: Vector3 = Vector3.ZERO
+	var dv: Vector3 = Vector3.ZERO
+
+	if d == 0:
+		du = Vector3(0.0, 0.0, float(w))
+		dv = Vector3(0.0, float(h), 0.0)
+	elif d == 1:
+		du = Vector3(float(w), 0.0, 0.0)
+		dv = Vector3(0.0, 0.0, float(h))
+	else:
+		du = Vector3(float(w), 0.0, 0.0)
+		dv = Vector3(0.0, float(h), 0.0)
+
+	var p0: Vector3 = Vector3(float(x0), float(y0), float(z0))
+	var p1: Vector3 = p0 + du
+	var p2: Vector3 = p0 + du + dv
+	var p3: Vector3 = p0 + dv
+
+	var n: Vector3 = Vector3.ZERO
+	if d == 0:
+		n.x = float(face_sign)
+	elif d == 1:
+		n.y = float(face_sign)
+	else:
+		n.z = float(face_sign)
+
+	# UV repeats in block-units, shader will tile using fract(UV)
+	var uv0: Vector2 = Vector2(0.0, 0.0)
+	var uv1: Vector2 = Vector2(float(w), 0.0)
+	var uv2v: Vector2 = Vector2(float(w), float(h))
+	var uv3: Vector2 = Vector2(0.0, float(h))
+
+	# UV2 stores atlas tile coordinate (tx, ty)
+	var tile: Vector2i = BlockRegistryScript.tile_for_face(id0, d, face_sign)
+	var tile_v: Vector2 = Vector2(float(tile.x), float(tile.y))
 
 	var base: int = verts.size()
-	verts.append(v0)
-	verts.append(v1)
-	verts.append(v2)
-	verts.append(v3)
 
-	norms.append(n)
-	norms.append(n)
-	norms.append(n)
-	norms.append(n)
-
-	# Simple UVs (we’ll do atlas UVs later)
-	uvs.append(Vector2(0, 0))
-	uvs.append(Vector2(1, 0))
-	uvs.append(Vector2(1, 1))
-	uvs.append(Vector2(0, 1))
-
-	if not backface:
-		indices.append(base + 0)
-		indices.append(base + 1)
-		indices.append(base + 2)
-		indices.append(base + 0)
-		indices.append(base + 2)
-		indices.append(base + 3)
+	if face_sign > 0:
+		verts.append(p0); verts.append(p1); verts.append(p2); verts.append(p3)
+		uv.append(uv0); uv.append(uv1); uv.append(uv2v); uv.append(uv3)
 	else:
-		indices.append(base + 0)
-		indices.append(base + 2)
-		indices.append(base + 1)
-		indices.append(base + 0)
-		indices.append(base + 3)
-		indices.append(base + 2)
+		verts.append(p0); verts.append(p3); verts.append(p2); verts.append(p1)
+		uv.append(uv0); uv.append(uv3); uv.append(uv2v); uv.append(uv1)
+
+	for _i in range(4):
+		norms.append(n)
+		uv2.append(tile_v)
+
+	indices.append(base + 0)
+	indices.append(base + 1)
+	indices.append(base + 2)
+	indices.append(base + 0)
+	indices.append(base + 2)
+	indices.append(base + 3)
